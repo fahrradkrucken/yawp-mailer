@@ -40,7 +40,7 @@ $sendResult = EmailMessage::new() // create new message, equivalent of '$message
     ->addBcc('mr.smith@maildomain.net')
     ->setSubject('Important Message!') // default: __('New message from ' . get_bloginfo('name'))
     ->setMessage($emailHtmlMessage)
-    ->addAttachment('/public/wp-content/uploads/2019/03/some-image.png')
+    ->addAttachment('/public/wp-content/uploads/2019/03/some-image.png') // File path, WP Attachment ID or WP Attachment object (WP_Post)
     ->asHtml() // Set content-type to text/html
     ->send(); // Send Message via wp_mail function
 
