@@ -32,9 +32,18 @@ class EmailMessage
             'message' => '',
             'contentType' => '',
         ]);
-        $this->from = $config['from'];
-        $this->subject = $config['from'];
-        $this->contentType = $config['contentType'];
+
+        if (is_string($config['from']))
+            $this->setFrom($config['from']);
+        elseif (is_array($config['from'])) {
+            if (count($config['from']) === 1)
+                $this->setFrom($config['from'][0]);
+            else (count($config['from']) === 2)
+                $this->setFrom($config['from'][0], $config['from'][1]);
+        }
+        $this->setSubject($config['subject']);
+        $this->setMessage($config['message']);
+        $this->contentType = in_array($config['contentType'], ['text/plain', 'text/html']) ? $config['contentType'] : '';
     }
 
     /**
