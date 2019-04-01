@@ -33,11 +33,14 @@ class EmailMessage
             'contentType' => '',
         ]);
 
-        if (is_string($config['from']))
+        if (is_string($config['from'])) {
             $this->setFrom($config['from']);
-        elseif (is_array($config['from']) && !empty($config['from']))
-            if (count($config['from']) === 1) $this->setFrom($config['from'][0]);
-            else $this->setFrom($config['from'][0], $config['from'][1]);
+        } elseif (is_array($config['from']) && !empty($config['from'])) {
+            if (count($config['from']) === 1)
+                $this->setFrom($config['from'][0]);
+            else
+                $this->setFrom($config['from'][0], $config['from'][1]);
+        }
         $this->setSubject($config['subject']);
         $this->setMessage($config['message']);
         $this->contentType = in_array($config['contentType'], ['text/plain', 'text/html']) ? $config['contentType'] : '';
@@ -45,13 +48,13 @@ class EmailMessage
 
     /**
      * @param array $config
-     * Initial config of the new message. Possible parameters and their defaults:
-     * [
-     *  'from' => get_bloginfo('admin_email'),
-     *  'subject' => __('New message from ' . get_bloginfo('name')),
-     *  'message' => '',
-     *  'contentType' => '',
-     * ]
+     *  Initial config of the new message. Possible parameters and their defaults:
+     *  [
+     *      'from' => get_bloginfo('admin_email'), // $from can be in this case: 'ema@il.com' OR ['ema@il.com', 'John Doe']
+     *      'subject' => __('New message from ' . get_bloginfo('name')),
+     *      'message' => '',
+     *      'contentType' => '',
+     *  ]
      *
      * @return EmailMessage
      */
