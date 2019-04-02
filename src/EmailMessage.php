@@ -8,6 +8,8 @@ namespace FahrradKruken\YAWP\Mailer;
  */
 class EmailMessage
 {
+    const CONTENT_TYPE_PLAIN_TEXT = 'text/plain';
+    const CONTENT_TYPE_HTML = 'text/html';
 
     private $from = '';
     private $replyTo = '';
@@ -18,6 +20,10 @@ class EmailMessage
     private $subject = '';
     private $message = '';
     private $attachments = [];
+//    private $stylesInline = [];
+//    private $stylesInHead = '';
+    public $stylesInline = [];
+    public $stylesInHead = '';
 
     /**
      * EmailMessage constructor.
@@ -43,18 +49,21 @@ class EmailMessage
         }
         $this->setSubject($config['subject']);
         $this->setMessage($config['message']);
-        $this->contentType = in_array($config['contentType'], ['text/plain', 'text/html']) ? $config['contentType'] : '';
+        $this->contentType = in_array($config['contentType'], [self::CONTENT_TYPE_PLAIN_TEXT, self::CONTENT_TYPE_HTML]) ?
+            $config['contentType'] :
+            '';
     }
 
     /**
      * @param array $config
-     *  Initial config of the new message. Possible parameters and their defaults:
-     *  [
-     *      'from' => get_bloginfo('admin_email'), // $from can be in this case: 'ema@il.com' OR ['ema@il.com', 'John Doe']
+     *      Initial config of the new message. Possible parameters and their defaults:
+     *      [
+     *      'from' => get_bloginfo('admin_email'), // $from can be in this case: 'ema@il.com' OR ['ema@il.com', 'John
+     *      Doe']
      *      'subject' => __('New message from ' . get_bloginfo('name')),
      *      'message' => '',
      *      'contentType' => '',
-     *  ]
+     *      ]
      *
      * @return EmailMessage
      */
@@ -96,7 +105,7 @@ class EmailMessage
      */
     public function asPlainText()
     {
-        $this->contentType = 'text/plain';
+        $this->contentType = self::CONTENT_TYPE_PLAIN_TEXT;
         return $this;
     }
 
@@ -107,7 +116,7 @@ class EmailMessage
      */
     public function asHtml()
     {
-        $this->contentType = 'text/html';
+        $this->contentType = self::CONTENT_TYPE_HTML;
         return $this;
     }
 
@@ -190,6 +199,34 @@ class EmailMessage
     }
 
     /**
+     * Add CSS that will be set into the $message as inline styles.
+     * Note:
+     * * If your styles content will contain @media queries or @font-face - they ALL will appear in <head> instead of
+     * inline;
+     * * If some of your selectors will contain pseudo-classes/elements - this selectors styles will appear in <head>;
+     *
+     * @param string $cssContent
+     *
+     * @return EmailMessage
+     */
+    public function setHtmlStylesInline($cssContent = '')
+    {
+        return $this->setHtmlStyles($cssContent, true, false);
+    }
+
+    /**
+     * Add CSS that will be set into a $message's <head>
+     *
+     * @param string $cssContent
+     *
+     * @return EmailMessage
+     */
+    public function setHtmlStylesInHeader($cssContent = '')
+    {
+        return $this->setHtmlStyles($cssContent, false, true);
+    }
+
+    /**
      * Send Email through WP_MAIL
      *
      * @return bool
@@ -198,7 +235,6 @@ class EmailMessage
     {
         $to = $this->to;
         $subject = $this->subject;
-        $message = $this->message;
         $attachments = $this->attachments;
         $headers = [];
 
@@ -213,6 +249,15 @@ class EmailMessage
         if (!empty($this->bcc))
             foreach ($this->bcc as $recipientEmail)
                 $headers[] = 'BCC: ' . $recipientEmail;
+
+        if (
+            $this->contentType === self::CONTENT_TYPE_HTML &&
+            (!empty($this->stylesInHead) || !empty($this->stylesInline))
+        ) {
+            $message = $this->addStylesToHtmlMessage($this->message);
+        } else {
+            $message = $this->message;
+        }
 
         return wp_mail($to, $subject, $message, $headers, $attachments);
     }
@@ -254,5 +299,88 @@ class EmailMessage
                 (filter_var($name, FILTER_SANITIZE_SPECIAL_CHARS) . '<' . $email . '>') :
                 $email;
         return '';
+    }
+
+    /**
+     * @param string $cssContent
+     * @param bool   $insertStylesInline
+     * @param bool   $insertStylesInHead
+     *
+     * @return $this
+     */
+    private function setHtmlStyles($cssContent = '', $insertStylesInline = true, $insertStylesInHead = true)
+    {
+        if (empty($cssContent)) return $this;
+        else $this->asHtml();
+
+        $styleString = preg_replace( // Clear styles from whitespaces & comments
+            ['/\s+/', '/\/\*.*?\*\//',],
+            [' ', '',],
+            $cssContent
+        );
+
+        if ( // if we shouldn't (or just can't) inline this styles - we'll set it in <head>
+            $insertStylesInHead ||
+            strpos($styleString, '@media') !== false ||
+            strpos($styleString, '@font-face') !== false
+        ) {
+            $this->stylesInHead = $styleString;
+            return $this;
+        }
+        if (!$insertStylesInline) return $this;
+
+        // now we can try to convert styles into array
+        $stylesArray = [];
+        preg_match_all('/(.*?){(.*?)}/', $styleString, $stylesArray, PREG_SET_ORDER);
+        if (!empty($stylesArray)) {
+            $this->stylesInline = [];
+            foreach ($stylesArray as $style) {
+                $selectors = explode(',', $style[1]);   // 1 Match (css selectors)
+                $styles = $style[2];                            // 2 Match (css style properties)
+                foreach ($selectors as $selector)
+                    if (!empty($selector))
+                        $this->stylesInline[trim($selector)] = trim($styles);
+            }
+        }
+
+        return $this;
+    }
+
+    /**
+     * Works on top of simple_html_dom and inserts prevously added styles into htmpl elements directly (inline) or in
+     * <head> section.
+     *
+     * @param string $htmlMessage
+     *
+     * @return string - HTML with inserted styles
+     */
+    private function addStylesToHtmlMessage($htmlMessage = '')
+    {
+        if (!class_exists('simple_html_dom') && !class_exists('simple_html_dom_node'))
+            require 'simple_html_dom.php';
+
+        $htmlWithStyles = str_get_html($htmlMessage);
+        if (empty($htmlWithStyles)) return $htmlMessage;
+
+        if (!empty($this->stylesInline)) {
+            $selectorsForbiddenToInline = '/:hover|:before|:after|::before|::after|:active|:focus|:first-child|:last-child/';
+            foreach ($this->stylesInline as $selector => $style) { // Add inline Styles according to css selectors
+                if (preg_match($selectorsForbiddenToInline, $selector) === 1) {
+                    $this->stylesInHead .= $selector . '{' . $style . '}';
+                    continue;
+                }
+                $elementsCount = count($htmlWithStyles->find($selector));
+                if ($elementsCount)
+                    for ($i = 0; $i < $elementsCount; $i++)
+                        $htmlWithStyles->find($selector, $i)->style .= $style;
+            }
+        }
+
+        if (!empty($this->stylesInHead)) { // Add styles in header
+            $htmlWithStyles->find('head', 0)->innertext .=
+                '<style type="text/css">' . $this->stylesInHead . '</style>';
+        }
+
+        return (string)$htmlWithStyles;
     }
 }
