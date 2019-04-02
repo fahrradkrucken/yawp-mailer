@@ -22,7 +22,7 @@ use FahrradKruken\YAWP\Mailer\EmailMessage;
 **IMPORTANT:** Use it ON or AFTER the 'init' event. It's not my fault, it's just
 recommendation for the wp_mail usage)
 
-#### Quick Start
+### Quick Start
 
 Look at the simple example below, for more information about class methods look at the code.
 
@@ -48,7 +48,7 @@ if ($sendResult) echo '<h3>Success!</h3>';
 else echo '<h3>Fail :(</h3>';
 ```  
 
-#### Using CSS
+### Using CSS
 
 If you want to use CSS in your html email template, but you don't want to inline styles 
 manually - you can use some (very simple) helpful methods to deal with this situation.
