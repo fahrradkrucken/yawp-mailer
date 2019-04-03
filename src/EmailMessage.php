@@ -11,6 +11,9 @@ class EmailMessage
     const CONTENT_TYPE_PLAIN_TEXT = 'text/plain';
     const CONTENT_TYPE_HTML = 'text/html';
 
+    const PROCESS_IMG_BASE64 = 'base64';
+    const PROCESS_IMG_ATTACHMENTS = 'attachments';
+
     private $from = '';
     private $replyTo = '';
     private $to = [];
@@ -20,10 +23,10 @@ class EmailMessage
     private $subject = '';
     private $message = '';
     private $attachments = [];
-//    private $stylesInline = [];
-//    private $stylesInHead = '';
-    public $stylesInline = [];
-    public $stylesInHead = '';
+    private $stylesInline = [];
+    private $stylesInHead = '';
+    private $processImages = '';
+    private $attachedImages = [];
 
     /**
      * EmailMessage constructor.
@@ -32,6 +35,8 @@ class EmailMessage
      */
     public function __construct($config = [])
     {
+        if (!class_exists('simple_html_dom')) require 'simple_html_dom.php';
+
         $config = wp_parse_args($config, [
             'from' => get_bloginfo('admin_email'),
             'subject' => __('New message from ' . get_bloginfo('name')),
@@ -227,6 +232,28 @@ class EmailMessage
     }
 
     /**
+     * Convert all images in html into base64 data strings, when it's possible
+     *
+     * @return $this
+     */
+    public function processImgAsBase64()
+    {
+        $this->processImages = self::PROCESS_IMG_BASE64;
+        return $this;
+    }
+
+    /**
+     * Convert all images in html to links that leads to email attachments
+     *
+     * @return $this
+     */
+    public function processImgAsAttachments()
+    {
+        $this->processImages = self::PROCESS_IMG_ATTACHMENTS;
+        return $this;
+    }
+
+    /**
      * Send Email through WP_MAIL
      *
      * @return bool
@@ -235,6 +262,7 @@ class EmailMessage
     {
         $to = $this->to;
         $subject = $this->subject;
+        $message = $this->message;
         $attachments = $this->attachments;
         $headers = [];
 
@@ -254,12 +282,26 @@ class EmailMessage
             $this->contentType === self::CONTENT_TYPE_HTML &&
             (!empty($this->stylesInHead) || !empty($this->stylesInline))
         ) {
-            $message = $this->addStylesToHtmlMessage($this->message);
-        } else {
-            $message = $this->message;
+            $message = $this->addStylesToHtmlMessage($message);
+        }
+        if (
+            !empty($this->processImages) &&
+            (in_array($this->processImages, [self::PROCESS_IMG_BASE64, self::PROCESS_IMG_ATTACHMENTS]))
+        ) {
+            $message = $this->processImagesInHtml($message);
         }
 
-        return wp_mail($to, $subject, $message, $headers, $attachments);
+        $sendResult = wp_mail($to, $subject, $message, $headers, $attachments);
+        if (
+            !empty($this->processImages) &&
+            (in_array($this->processImages, [self::PROCESS_IMG_BASE64, self::PROCESS_IMG_ATTACHMENTS]))
+        ) {
+            $this->postProcessImagesInHtml();
+            remove_action('phpmailer_init', [$this, '__attachedImagesAdd']);
+            $this->attachedImages = [];
+        }
+
+        return $sendResult;
     }
 
     /**
@@ -356,9 +398,6 @@ class EmailMessage
      */
     private function addStylesToHtmlMessage($htmlMessage = '')
     {
-        if (!class_exists('simple_html_dom') && !class_exists('simple_html_dom_node'))
-            require 'simple_html_dom.php';
-
         $htmlWithStyles = str_get_html($htmlMessage);
         if (empty($htmlWithStyles)) return $htmlMessage;
 
@@ -382,5 +421,82 @@ class EmailMessage
         }
 
         return (string)$htmlWithStyles;
+    }
+
+    private function processImagesInHtml($htmlMessage = '')
+    {
+        $htmlDomTree = str_get_html($htmlMessage);
+        if (empty($htmlDomTree)) return $htmlMessage;
+        $imagesCount = count($htmlDomTree->find('img'));
+        if (!$imagesCount) return $htmlMessage;
+
+//        wp_check_filetype()
+        if ($this->processImages === self::PROCESS_IMG_BASE64) { // All images to base64 strings
+
+            for ($i = 0; $i < $imagesCount; $i++) {
+                $fileSrc = $htmlDomTree->find('img', $i)->src;
+                $fileInfo = wp_check_filetype($fileSrc);
+                $fileContent = file_get_contents($fileSrc);
+                if (strpos($fileInfo['type'], 'image') !== false || empty($fileContent)) continue;
+                $htmlDomTree->find('img', $i)->src =
+                    'data:' . $fileInfo['type'] . ';base64,' . base64_encode($fileContent);
+            }
+
+        } elseif ($this->processImages === self::PROCESS_IMG_ATTACHMENTS) { // All images to attachments
+
+            $this->attachedImages = [];
+            for ($i = 0; $i < $imagesCount; $i++) {
+                $fileID = uniqid('tmp_img_');
+                $fileSrc = $htmlDomTree->find('img', $i)->src;
+                $fileName = !empty($htmlDomTree->find('img', $i)->alt) ?
+                    $htmlDomTree->find('img', $i)->alt :
+                    $fileID;
+                $fileInfo = wp_check_filetype($fileSrc);
+                $fileContent = file_get_contents($fileSrc);
+                if (strpos($fileInfo['type'], 'image') !== false || empty($fileContent)) continue;
+
+                $tmpDir = wp_get_upload_dir()['basedir'];
+                $filePath = $tmpDir . DIRECTORY_SEPARATOR . $fileID . '.' . $fileInfo['ext'];
+                file_put_contents($filePath, $fileContent);
+
+                $this->attachedImages[] = [
+                    'uid' => $fileID,
+                    'name' => $fileName,
+                    'path' => $filePath,
+                ];
+
+                $htmlDomTree->find('img', $i)->src = 'cid:' . $fileID;
+            }
+
+            add_action('phpmailer_init', [$this, '__attachedImagesAdd']);
+        }
+
+        return (string)$htmlDomTree;
+    }
+
+
+    private function postProcessImagesInHtml()
+    {
+        if (empty($this->attachedImages)) return;
+        foreach ($this->attachedImages as $imageAttachment)
+            if (file_exists($imageAttachment['path']))
+                unlink($imageAttachment['path']);
+    }
+
+    // --
+    // -- Methods for internal usage with WP - PLEASE DON"T CALL THEM DIRECTLY
+    // --
+
+    public function __attachedImagesAdd(&$phpmailer)
+    {
+        if (empty($this->attachedImages)) return;
+        $phpmailer->SMTPKeepAlive = true;
+        foreach ($this->attachedImages as $imageAttachment) {
+            $phpmailer->AddEmbeddedImage(
+                $imageAttachment['path'],
+                $imageAttachment['uid'],
+                $imageAttachment['name']
+            );
+        }
     }
 }
